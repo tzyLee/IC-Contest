@@ -1,0 +1,20 @@
+
+FTP account:                       B22149
+
+Level:                             A
+cycle:                             403205
+Synthesis area:                    7507.600172
+
+--- RTL category---
+HDL simulator :                    ncverilog
+RTL filename :                     JAM.v
+
+--- Pre-layout gate-level ---
+gate-levelfilename:                JAM_syn.v
+gate-level sdf filename:           JAM_syn.sdf
+
+-----(annotation)--------------------------------------------------------
+ (optional, write down anything that you want grader know)
+P1 = 403205
+P2 = 403205
+P3 = 403205

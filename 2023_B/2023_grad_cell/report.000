@@ -1,0 +1,20 @@
+
+FTP account:                       B23183
+
+Level:                             A
+cycle:                             9747
+Synthesis area:                    36657
+
+--- RTL category---
+HDL simulator :                    vcs
+RTL filename :                     LASER.v
+
+--- Pre-layout gate-level ---
+gate-levelfilename:                LASER_syn.v
+gate-level sdf filename:           LASER_syn.sdf
+
+-----(annotation)--------------------------------------------------------
+ (optional, write down anything that you want raters know)
+
+圓心在 (2, 2) 的 半徑=4 的圓包含所有圓心在其左上角的圓涵蓋的範圍，所以可以只考慮 2~13 的座標。
+(就算 (0, 1) 可以涵蓋許多點，因為 (2, 2) 一定包含他範圍內的所有點， (2, 2) 包含的點 >= (0, 1) 包含的點)

@@ -240,7 +240,7 @@ wire [7:0] exp_adjust;
 assign exp_adjust = rexponent-FRAC_WIDTH;
 assign ELU_output = rsign ? {rsign, exp_adjust, rmantissa} : x_r;
 assign Sigmoid_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
-assign SiLU_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
+assign SiLU_output = {rsign, exp_adjust, rmantissa};
 assign Tanh_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
 
 assign CEN = counter_r == 2'b00 ? 1'b0 : 1'b1;

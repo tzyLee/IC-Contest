@@ -19,8 +19,8 @@ localparam Sigmoid = 3'b010;
 localparam SiLU = 3'b011;
 localparam Tanh = 3'b100;
 
-localparam INT_WIDTH = 23;
-localparam FRAC_WIDTH = 22; // 1bit sign, 21 bit integer => FRAC_WIDTH+4
+localparam INT_WIDTH = 10;
+localparam FRAC_WIDTH = 30; // 1bit sign, 21 bit integer => FRAC_WIDTH+4
 localparam FIX_WIDTH = FRAC_WIDTH+INT_WIDTH;
 localparam LN2 = 10'd709; // 10bit fraction;
 
@@ -35,9 +35,11 @@ reg signed [FIX_WIDTH-1:0] fixed2_r, fixed2_w;
 reg signed [FIX_WIDTH-1:0] fixed3_r, fixed3_w;
 reg signed [FIX_WIDTH-1:0] fixed4_r, fixed4_w;
 reg signed [FIX_WIDTH-1:0] prev_sum_r, prev_sum_w;
+reg signed [2*FIX_WIDTH-1:0] prev_sum_full_r, prev_sum_full_w;
 
 wire signed [FIX_WIDTH-1:0] const;
 wire signed [FIX_WIDTH+2:0] adder_sum;
+wire signed [2*FIX_WIDTH+3:0] adder_sum_full;
 wire signed [FIX_WIDTH-1:0] adder_sumt;
 wire signed [2*FIX_WIDTH-1:0] m1;
 wire signed [2*FIX_WIDTH-1:0] m2;
@@ -60,6 +62,7 @@ reg signed [FIX_WIDTH-1:0] m6c;
 reg signed [FIX_WIDTH-1:0] m7c;
 reg signed [FIX_WIDTH-1:0] m8c;
 reg signed [FIX_WIDTH-1:0] c0;
+wire signed [2*FIX_WIDTH-1:0] c0_full;
 
 wire [FIX_WIDTH-1:0] fixed_ln2;
 wire [FIX_WIDTH-1:0] fixed;
@@ -79,7 +82,7 @@ sram1024x32 u_mem(.Q(), .CLK(clk), .CEN(CEN), .WEN(WEN), .A(addr_r), .D(output_d
 
 
 DW_fp_flt2i #(.isize(FIX_WIDTH)) u_flt2i(.a(shifted_fp32), .rnd(3'b000), .z(fixed), .status());
-DW_fp_i2flt #(.isize(FIX_WIDTH)) u_i2flt(.a(prev_sum_r), .rnd(3'b000), .z(recover_fp32), .status());
+DW_fp_i2flt #(.isize(2*FIX_WIDTH)) u_i2flt(.a(prev_sum_full_r), .rnd(3'b000), .z(recover_fp32), .status());
 
 assign m1a = (counter_r[0] ? $signed(m2t) : $signed(fixed3_r));
 assign m1b = (counter_r[0] ? $signed(fixed) : $signed(fixed4_r));
@@ -110,6 +113,10 @@ assign m7t = m7[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 assign m8t = m8[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 
 assign adder_sum = ($signed(m5t) + $signed(m6t) + $signed(m7t) + $signed(m8t) + (counter_r == 2'b10 ? $signed(c0) : $signed(prev_sum_r)));
+
+assign c0_full = $signed({c0[FIX_WIDTH-1:0], {FRAC_WIDTH{1'b0}}});
+
+assign adder_sum_full = ($signed(m5) + $signed(m6) + $signed(m7) + $signed(m8) + (counter_r == 2'b10 ? c0_full : $signed(prev_sum_full_r)));
 assign adder_sumt = adder_sum[FIX_WIDTH-1:0];
 
 //wire signed [FIX_WIDTH+2:0] debug_sum, debug_sum2, debug_sum3, debug_sum4;
@@ -127,15 +134,16 @@ always @(*) begin
         m8c = 0;
     end
     ELU: begin
-        m5c = counter_r == 2'b10 ? 45'sd7550 : 0;
-        m6c = counter_r == 2'b10 ? 45'sd57462 : 0;
-        m7c = counter_r == 2'b10 ? 45'sd229428 : 45'sd419;
-        m8c = counter_r == 2'b10 ? 45'sd509608 : 0;
-        c0 = -45'sd1678;
+        m5c = counter_r == 2'b10 ? 100'sd1932735 : 0;
+        m6c = counter_r == 2'b10 ? 100'sd14710263 : 0;
+        m7c = counter_r == 2'b10 ? 100'sd58733678 : 100'sd107374;
+        m8c = counter_r == 2'b10 ? 100'sd130459632 : 0;
+        c0 = -100'sd429497;
     end
     endcase
 end
-
+//     3355       60398      459696     1835427     4076863      -13422
+//      107374     1932735    14710263    58733678   130459632     -429497
 always @(*) begin
     fixed_w = fixed_r;
     fixed2_w = fixed2_r;
@@ -174,6 +182,7 @@ always @(posedge clk) begin
     fixed3_r <= fixed3_w;
     fixed4_r <= fixed4_w;
 end
+
 always @(*) begin
     if (counter_r == 2'b01) begin
         prev_sum_w = 0;
@@ -184,6 +193,18 @@ always @(*) begin
 end
 always @(posedge clk) begin
     prev_sum_r <= prev_sum_w;
+end
+
+always @(*) begin
+    if (counter_r == 2'b01) begin
+        prev_sum_full_w = 0;
+    end
+    else begin
+        prev_sum_full_w = adder_sum_full;
+    end
+end
+always @(posedge clk) begin
+    prev_sum_full_r <= prev_sum_full_w;
 end
 
 //assign fixed_ln2 = LN2 * $signed(fixed_r);
@@ -199,7 +220,7 @@ assign {rsign, rexponent, rmantissa} = recover_fp32;
 
 assign PReLU_output = sign ? {sign, exp_minus_3, mantissa} : x_r;
 wire [7:0] exp_adjust;
-assign exp_adjust = rexponent-FRAC_WIDTH;
+assign exp_adjust = rexponent-(2*FRAC_WIDTH);
 assign ELU_output = rsign ? {rsign, exp_adjust, rmantissa} : x_r;
 
 

@@ -35,6 +35,7 @@ reg signed [FIX_WIDTH-1:0] fixed2_r, fixed2_w;
 reg signed [FIX_WIDTH-1:0] fixed3_r, fixed3_w;
 reg signed [FIX_WIDTH-1:0] fixed4_r, fixed4_w;
 reg signed [FIX_WIDTH-1:0] prev_sum_r, prev_sum_w;
+reg signed [FIX_WIDTH-1:0] to_convert;
 
 wire signed [FIX_WIDTH-1:0] const;
 wire signed [FIX_WIDTH+2:0] adder_sum;
@@ -47,6 +48,7 @@ wire signed [2*FIX_WIDTH-1:0] m5;
 wire signed [2*FIX_WIDTH-1:0] m6;
 wire signed [2*FIX_WIDTH-1:0] m7;
 wire signed [2*FIX_WIDTH-1:0] m8;
+wire signed [2*FIX_WIDTH-1:0] m9;
 wire signed [FIX_WIDTH-1:0] m1t, m1a, m1b;
 wire signed [FIX_WIDTH-1:0] m2t, m2a, m2b;
 wire signed [FIX_WIDTH-1:0] m3t, m3a, m3b;
@@ -55,6 +57,7 @@ wire signed [FIX_WIDTH-1:0] m5t;//, m5a, m5b;
 wire signed [FIX_WIDTH-1:0] m6t;//, m6a, m6b;
 wire signed [FIX_WIDTH-1:0] m7t;//, m7a, m7b;
 wire signed [FIX_WIDTH-1:0] m8t, m8a, m8b;
+wire signed [FIX_WIDTH-1:0] m9t;
 reg signed [FIX_WIDTH-1:0] m5c;
 reg signed [FIX_WIDTH-1:0] m6c;
 reg signed [FIX_WIDTH-1:0] m7c;
@@ -69,7 +72,7 @@ wire sign, rsign;
 wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp;
 wire [22:0] mantissa, rmantissa;
 
-wire [31:0] PReLU_output, ELU_output, Sigmoid_output;
+wire [31:0] PReLU_output, ELU_output, Sigmoid_output, SiLU_output;
 reg [31:0] shifted_fp32;
 wire [31:0] recover_fp32;
 reg [31:0] output_data;
@@ -79,7 +82,7 @@ sram1024x32 u_mem(.Q(), .CLK(clk), .CEN(CEN), .WEN(WEN), .A(addr_r), .D(output_d
 
 
 DW_fp_flt2i #(.isize(FIX_WIDTH)) u_flt2i(.a(shifted_fp32), .rnd(3'b000), .z(fixed), .status());
-DW_fp_i2flt #(.isize(FIX_WIDTH)) u_i2flt(.a(prev_sum_r), .rnd(3'b000), .z(recover_fp32), .status());
+DW_fp_i2flt #(.isize(FIX_WIDTH)) u_i2flt(.a(to_convert), .rnd(3'b000), .z(recover_fp32), .status());
 
 assign m1a = (counter_r[0] ? $signed(m2t) : $signed(fixed3_r));
 assign m1b = (counter_r[0] ? $signed(fixed) : $signed(fixed4_r));
@@ -99,6 +102,7 @@ assign m1 = $signed(m1a) * $signed(m1b);
 assign m2 = $signed(m2a) * $signed(m2b);
 assign m3 = $signed(m3a) * $signed(m3b);
 assign m8 = $signed(m8a) * $signed(m8b);
+assign m9 = $signed(prev_sum_r) * $signed(fixed);
 
 assign m1t = m1[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 assign m2t = m2[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
@@ -108,6 +112,7 @@ assign m5t = m5[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 assign m6t = m6[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 assign m7t = m7[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 assign m8t = m8[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
+assign m9t = m9[2*FRAC_WIDTH+INT_WIDTH-1:FRAC_WIDTH];
 
 assign adder_sum = ($signed(m5t) + $signed(m6t) + $signed(m7t) + $signed(m8t) + (counter_r == 2'b10 ? $signed(c0) : $signed(prev_sum_r)));
 assign adder_sumt = adder_sum[FIX_WIDTH-1:0];
@@ -117,6 +122,17 @@ assign adder_sumt = adder_sum[FIX_WIDTH-1:0];
 //assign debug_sum2 = $signed(fixed3_r) + $signed(fixed4_r);
 //assign debug_sum3 = $signed(debug_sum) + $signed(debug_sum2);
 //assign debug_sum4 = $signed(debug_sum3) + $signed(c0);
+always @(*) begin
+    case(fn_sel)
+    PReLU, ELU, Sigmoid: begin
+        to_convert = prev_sum_r;
+    end
+    SiLU: begin
+        to_convert = m9t;
+    end
+    default: to_convert = prev_sum_r;
+    endcase
+end
 
 always @(*) begin
     case(fn_sel)
@@ -133,7 +149,7 @@ always @(*) begin
         m8c = counter_r == 2'b10 ? 45'sd509608 : 0;
         c0 = -45'sd1678;
     end
-    Sigmoid: begin
+    Sigmoid, SiLU: begin
         m5c = counter_r == 2'b10 ? -45'sd44879 : 0;
         m6c = counter_r == 2'b10 ? -45'sd149317 : -45'sd419;
         m7c = counter_r == 2'b10 ? -45'sd40265 : -45'sd5872;
@@ -206,6 +222,7 @@ assign shifted_exp = exponent+FRAC_WIDTH;
 always @(*) begin
     case(fn_sel)
     Sigmoid: shifted_fp32 = {1'b1, shifted_exp, mantissa};
+    SiLU: shifted_fp32 = {1'b1, shifted_exp, mantissa};
     default: shifted_fp32 = {sign, shifted_exp, mantissa};
     endcase
 end
@@ -217,6 +234,7 @@ wire [7:0] exp_adjust;
 assign exp_adjust = rexponent-FRAC_WIDTH;
 assign ELU_output = rsign ? {rsign, exp_adjust, rmantissa} : x_r;
 assign Sigmoid_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
+assign SiLU_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
 
 
 assign CEN = counter_r == 2'b00 ? 1'b0 : 1'b1;
@@ -228,6 +246,7 @@ always @(*) begin
     PReLU: output_data = PReLU_output;
     ELU: output_data = ELU_output;
     Sigmoid: output_data = Sigmoid_output;
+    SiLU: output_data = SiLU_output;
     default: output_data = 0;
     endcase
 end

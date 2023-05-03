@@ -72,7 +72,7 @@ wire sign, rsign;
 wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp;
 wire [22:0] mantissa, rmantissa;
 
-wire [31:0] PReLU_output, ELU_output, Sigmoid_output, SiLU_output;
+wire [31:0] PReLU_output, ELU_output, Sigmoid_output, SiLU_output, Tanh_output;
 reg [31:0] shifted_fp32;
 wire [31:0] recover_fp32;
 reg [31:0] output_data;
@@ -95,7 +95,7 @@ assign m4 = $signed(fixed4_r) * $signed(fixed4_r);
 assign m5 = $signed(fixed4_r) * $signed(m5c);
 assign m6 = $signed(fixed3_r) * $signed(m6c);
 assign m7 = $signed(fixed2_r) * $signed(m7c);
-assign m8a = (counter_r[1] ? $signed(fixed) : $signed(m4t));
+assign m8a = (counter_r[0] ? $signed(fixed_r) : $signed(fixed));
 assign m8b = $signed(m8c);
 
 assign m1 = $signed(m1a) * $signed(m1b);
@@ -124,7 +124,7 @@ assign adder_sumt = adder_sum[FIX_WIDTH-1:0];
 //assign debug_sum4 = $signed(debug_sum3) + $signed(c0);
 always @(*) begin
     case(fn_sel)
-    PReLU, ELU, Sigmoid: begin
+    PReLU, ELU, Sigmoid, Tanh: begin
         to_convert = prev_sum_r;
     end
     SiLU: begin
@@ -156,6 +156,13 @@ always @(*) begin
         m8c = counter_r == 2'b10 ? 45'sd1038090 : 0;
         //c0 = -45'sd839;
         c0 = sign ? 45'sd2096313 : -45'sd2097991;
+    end
+    Tanh: begin
+        m5c = counter_r == 2'b10 ? -45'sd1423127 : -45'sd7550;
+        m6c = counter_r == 2'b10 ? -45'sd2132384 : -45'sd79692;
+        m7c = counter_r == 2'b10 ? -45'sd39426 : -45'sd454243;
+        m8c = counter_r == 2'b10 ? 45'sd4246313 : -45'sd419;
+        c0 = 45'sd3355;
     end
     endcase
 end
@@ -221,8 +228,7 @@ assign shifted_exp = exponent+FRAC_WIDTH;
 
 always @(*) begin
     case(fn_sel)
-    Sigmoid: shifted_fp32 = {1'b1, shifted_exp, mantissa};
-    SiLU: shifted_fp32 = {1'b1, shifted_exp, mantissa};
+    Sigmoid, SiLU, Tanh: shifted_fp32 = {1'b1, shifted_exp, mantissa};
     default: shifted_fp32 = {sign, shifted_exp, mantissa};
     endcase
 end
@@ -235,7 +241,7 @@ assign exp_adjust = rexponent-FRAC_WIDTH;
 assign ELU_output = rsign ? {rsign, exp_adjust, rmantissa} : x_r;
 assign Sigmoid_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
 assign SiLU_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
-
+assign Tanh_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
 
 assign CEN = counter_r == 2'b00 ? 1'b0 : 1'b1;
 assign WEN = 1'b0;
@@ -247,6 +253,7 @@ always @(*) begin
     ELU: output_data = ELU_output;
     Sigmoid: output_data = Sigmoid_output;
     SiLU: output_data = SiLU_output;
+    Tanh: output_data = Tanh_output;
     default: output_data = 0;
     endcase
 end

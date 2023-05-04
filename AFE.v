@@ -24,7 +24,7 @@ localparam Tanh = 3'b100;
 
 // Bit-width of initial fixed point `x`
 localparam X_INT_WIDTH = 4;
-localparam X_FRAC_WIDTH = 24; // without SiLU, this can be 24 (|x| >= 4 can be handled exclusively)
+localparam X_FRAC_WIDTH = 28; // without SiLU, this can be 24 (|x| >= 4 can be handled exclusively)
 localparam X_FIX_WIDTH = X_FRAC_WIDTH+X_INT_WIDTH;
 
 // Multiplier (A*B) bitwidth
@@ -178,25 +178,25 @@ always @(*) begin
         c0 = 0;
     end
     ELU: begin
-        m5c = counter_r == 2'b10 ? 100'sd120861 : 0;
-        m6c = counter_r == 2'b10 ? 100'sd916204 : 0;
-        m7c = counter_r == 2'b10 ? 100'sd3670829 : 100'sd6498;
-        m8c = counter_r == 2'b10 ? 100'sd8151240 : 0;
-        c0 = -100'sd6;
+        m5c = counter_r == 2'b10 ? 100'sd1933772 : 0;
+        m6c = counter_r == 2'b10 ? 100'sd14659262 : 0;
+        m7c = counter_r == 2'b10 ? 100'sd58733260 : 100'sd103968;
+        m8c = counter_r == 2'b10 ? 100'sd130419856 : 0;
+        c0 = -100'sd103;
     end
     Sigmoid, SiLU: begin
-        m5c = counter_r == 2'b10 ? -100'sd700400 : 0;
-        m6c = counter_r == 2'b10 ? -100'sd2342768 : -100'sd4200;
-        m7c = counter_r == 2'b10 ? -100'sd594388 : -100'sd88136;
-        m8c = counter_r == 2'b10 ? 100'sd16629556 : 0;
-        c0 = sign ? 100'sd8190 : -100'sd8194;
+        m5c = counter_r == 2'b10 ? -100'sd13029075 : -100'sd3205;
+        m6c = counter_r == 2'b10 ? -100'sd41075636: -100'sd129840;
+        m7c = counter_r == 2'b10 ? -100'sd12987086 : -100'sd1889816;
+        m8c = counter_r == 2'b10 ? 100'sd264685936 : 0;
+        c0 = sign ? 100'sd131005 : -100'sd131139;
     end
     Tanh: begin
-        m5c = counter_r == 2'b10 ? -100'sd25917724 : -100'sd144228;
-        m6c = counter_r == 2'b10 ? -100'sd38697944 : -100'sd1518939;
-        m7c = counter_r == 2'b10 ? -100'sd3891761 : -100'sd8448092;
-        m8c = counter_r == 2'b10 ? 100'sd67089280 : -100'sd5652;
-        c0 = 100'sd10;
+        m5c = counter_r == 2'b10 ? -100'sd414683680 : -100'sd2307650;
+        m6c = counter_r == 2'b10 ? -100'sd619167488 : -100'sd24303016;
+        m7c = counter_r == 2'b10 ? -100'sd62268568 : -100'sd135169440;
+        m8c = counter_r == 2'b10 ? 100'sd1073428416 : -100'sd90435;
+        c0 = 100'sd152;
     end
     default: begin
         m5c = 0;

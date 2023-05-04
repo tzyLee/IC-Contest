@@ -1,0 +1,6 @@
+/usr/cad/synopsys/synthesis/cur/dw/doc/manuals/dwbb_userguide.pdf
+/usr/cad/icc2023/bggc/CBDK_IC_Contest_v2.5
+
+/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v
+
+vcs -R -full64 +notimingchecks testfixture.v AFE.v sram1024x32/sram1024x32.v ./DW_fp_flt2i.v  -debug_access+all -debug_region+cell +v2k +define+sim1

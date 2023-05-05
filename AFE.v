@@ -1,11 +1,14 @@
 // `include "/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v"
 // `include "/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_i2flt.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_addsub.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_ifp_fp_conv.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_ifp_conv.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_ifp_addsub.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_sum4.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_mult.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_addsub.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_ifp_fp_conv.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_ifp_conv.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_ifp_addsub.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_sum4.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_mult.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_mac.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_add.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_dp2.v"
 
 
 module AFE(clk, rst, fn_sel, x, busy, done);
@@ -26,34 +29,6 @@ localparam Sigmoid = 3'b010;
 localparam SiLU = 3'b011;
 localparam Tanh = 3'b100;
 
-// Bit-width of initial fixed point `x`
-localparam X_INT_WIDTH = 4;
-localparam X_FRAC_WIDTH = 28; // without SiLU, this can be 24 (|x| >= 4 can be handled exclusively)
-localparam X_FIX_WIDTH = X_FRAC_WIDTH+X_INT_WIDTH;
-
-// Multiplier (A*B) bitwidth
-localparam MULT_INT_WIDTH = X_INT_WIDTH+18;
-localparam MULT_FRAC_WIDTH = X_FRAC_WIDTH+2;
-localparam MULT_FIX_WIDTH = MULT_INT_WIDTH+MULT_FRAC_WIDTH;
-
-// Truncation
-localparam TERM_FRAC_WIDTH = X_FRAC_WIDTH-10;
-localparam TERM_INT_WIDTH = X_FIX_WIDTH-2-TERM_FRAC_WIDTH;
-localparam TERM_FIX_WIDTH = TERM_INT_WIDTH+TERM_FRAC_WIDTH;
-
-// Result bitwidth
-localparam MULT_RES_INT_WIDTH = MULT_INT_WIDTH+MULT_INT_WIDTH;
-localparam MULT_RES_FRAC_WIDTH = MULT_FRAC_WIDTH+MULT_FRAC_WIDTH;
-localparam MULT_RES_FIX_WIDTH = MULT_RES_INT_WIDTH+MULT_RES_FRAC_WIDTH;
-
-localparam SUM_RES_INT_WIDTH = TERM_INT_WIDTH+4;
-localparam SUM_RES_FRAC_WIDTH = TERM_FRAC_WIDTH;
-localparam SUM_RES_FIX_WIDTH = SUM_RES_INT_WIDTH+SUM_RES_FRAC_WIDTH;
-
-localparam MULT9_RES_INT_WIDTH = TERM_INT_WIDTH+X_INT_WIDTH;
-localparam MULT9_RES_FRAC_WIDTH = TERM_FRAC_WIDTH+X_FRAC_WIDTH;
-localparam MULT9_RES_FIX_WIDTH = MULT9_RES_INT_WIDTH+MULT9_RES_FRAC_WIDTH;
-
 // Controls
 // reg [31:0] x_r, x_w;
 reg [1:0] state_r, state_w;
@@ -68,57 +43,29 @@ wire [9:0] addr_plus_1;
 wire CEN, WEN;
 reg [31:0] output_data;
 
-// Stores x, x^2, x^3, x^4
-//     or x^5, x^6, x^7, x^8
-reg signed [MULT_FIX_WIDTH-1:0] fixed1_r, fixed1_w;
-reg signed [MULT_FIX_WIDTH-1:0] fixed2_r, fixed2_w;
-reg signed [MULT_FIX_WIDTH-1:0] fixed3_r, fixed3_w;
-reg signed [MULT_FIX_WIDTH-1:0] fixed4_r, fixed4_w;
-wire signed [MULT_FIX_WIDTH-1:0] fixed_padded;
-
-reg ori_sign_r, ori_sign_w;
+reg ori_sign_r[0:2], ori_sign_w[0:2];
 reg [31:0] pow_x_r[1:8], pow_x_w[1:8];
 reg [31:0] flipped_x;
-wire [31:0] mult_a[0:5], mult_b[0:5], mult_z[0:5];
+wire [31:0] mult_a[0:5], mult_b[0:6], mult_z[0:6];
 reg [31:0] c[0:8];
 wire [31:0] add4a, add4b, add4c, add4d, add4z, final_result;
+wire [31:0] add2z;
+reg [31:0] delay_x_r[1:2], delay_x_w[1:2];
 
 // Stores \sum_{i} c{i}x^{i}
 // reg signed [TERM_FIX_WIDTH-1:0] prev_sum_r, prev_sum_w;
 reg [31:0] prev_sum_r, prev_sum_w;
-wire signed [SUM_RES_FIX_WIDTH-1:0] adder_sum;
-wire signed [TERM_FIX_WIDTH-1:0] adder_sumt;
-
+reg [31:0] prev_sum2_r, prev_sum2_w;
+reg [31:0] sum12_r, sum12_w;
+wire [31:0] mac_c[0:1];
 // fp <-> fixed
-reg signed [TERM_FIX_WIDTH-1:0] to_convert;
-reg signed [X_FIX_WIDTH-1:0] fixed_r, fixed_w;
-wire [X_FIX_WIDTH-1:0] fixed;
-reg [31:0] shifted_fp32;
-wire [31:0] recover_fp32;
 
 wire [7:0] exp_adjust;
 wire sign, rsign, unbuf_sign, s_sign;
 wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp, unbuf_exponent, s_exponent;
 wire [22:0] mantissa, rmantissa, unbuf_mantissa, s_mantissa;
 
-// Multiplier outputs
-wire signed [MULT_RES_FIX_WIDTH-1:0] m1, m2, m3, m4;
-wire signed [MULT_RES_FIX_WIDTH-1:0] m5, m6, m7, m8;
-wire signed [MULT9_RES_FIX_WIDTH-1:0] m9; // m9 for SiLU = x * sigmoid(x)
-
-// Multiplier inputs
-wire signed [MULT_FIX_WIDTH-1:0] m1a, m2a, m3a, m8a;
-wire signed [MULT_FIX_WIDTH-1:0] m1b, m2b, m3b;
-
-// Multiplier outputs (truncated)
-wire signed [MULT_FIX_WIDTH-1:0] m1t, m2t, m3t, m4t, m5t, m6t, m7t, m8t;
-wire signed [TERM_FIX_WIDTH-1:0] m1tc, m2tc, m3tc, m4tc, m5tc, m6tc, m7tc, m8tc;
-wire signed [TERM_FIX_WIDTH-1:0] m9t;
-
-// Polynomial constants
-reg signed [MULT_FIX_WIDTH-1:0] m5c, m6c, m7c, m8c;
-reg signed [TERM_FIX_WIDTH-1:0] c0;
-
+reg [31:0] output_r, output_w;
 wire [31:0] PReLU_output, ELU_output, Sigmoid_output, SiLU_output, Tanh_output;
 
 integer i;
@@ -129,44 +76,43 @@ DW_fp_mult u_m1(.a(mult_a[0]), .b(mult_b[0]), .rnd(3'b000), .z(mult_z[0]), .stat
 DW_fp_mult u_m2(.a(mult_a[1]), .b(mult_b[1]), .rnd(3'b000), .z(mult_z[1]), .status());
 DW_fp_mult u_m3(.a(mult_a[2]), .b(mult_b[2]), .rnd(3'b000), .z(mult_z[2]), .status());
 DW_fp_mult u_m4(.a(mult_a[3]), .b(mult_b[3]), .rnd(3'b000), .z(mult_z[3]), .status());
-DW_fp_mult u_m5(.a(mult_a[4]), .b(mult_b[4]), .rnd(3'b000), .z(mult_z[4]), .status());
-DW_fp_mult u_m6(.a(mult_a[5]), .b(mult_b[5]), .rnd(3'b000), .z(mult_z[5]), .status());
 
-assign mult_a[0] = counter_r == 2'b00 ? flipped_x : (counter_r == 2'b11 ? c[7] : pow_x_r[1]);
+DW_fp_mac u_m5(.a(mult_a[4]), .b(mult_b[4]), .c(mac_c[0]), .rnd(3'b000), .z(mult_z[4]), .status());
+DW_fp_mac u_m6(.a(mult_a[5]), .b(mult_b[5]), .c(mac_c[1]), .rnd(3'b000), .z(mult_z[5]), .status());
+
+assign mac_c[0] = counter_r == 2'b01 ? 32'b0 : prev_sum_r;
+assign mac_c[1] = counter_r == 2'b01 ? c[0] : prev_sum2_r;
+
+assign mult_b[6] = fn_sel == SiLU ? delay_x_r[2] : 32'h3f800000;
+DW_fp_mult u_m7(.a(sum12_r), .b(mult_b[6]), .rnd(3'b000), .z(mult_z[6]), .status());
+
+assign mult_a[0] = counter_r == 2'b00 ? flipped_x : pow_x_r[1];
 assign mult_b[0] = counter_r == 2'b00 ? flipped_x :
-                   counter_r == 2'b01 ? pow_x_r[2] :
-                   counter_r == 2'b10 ? pow_x_r[4] :
-                                        pow_x_r[7];
+                   counter_r == 2'b01 ? pow_x_r[2] : pow_x_r[4];
 assign mult_a[1] = counter_r == 2'b00 ? pow_x_r[1] : pow_x_r[2];
 assign mult_b[1] = counter_r == 2'b00 ? prev_sum_r :
                    counter_r == 2'b01 ? pow_x_r[2] : pow_x_r[4];
-assign mult_a[2] = counter_r == 2'b00 ? c[8] : pow_x_r[3];
-assign mult_b[2] = counter_r == 2'b00 ? pow_x_r[8] : pow_x_r[4];
+assign mult_a[2] = pow_x_r[3];
+assign mult_b[2] = pow_x_r[4];
 assign mult_a[3] = pow_x_r[4];
 assign mult_b[3] = pow_x_r[4];
 
-assign mult_a[4] = counter_r == 2'b00 ? 32'b0 :
+assign mult_a[4] = counter_r == 2'b00 ? c[7] :
                    counter_r == 2'b01 ? c[1] :
                    counter_r == 2'b10 ? c[3] : c[5];
-assign mult_b[4] = counter_r == 2'b00 ? 32'b0 :
+assign mult_b[4] = counter_r == 2'b00 ? pow_x_r[7] :
                    counter_r == 2'b01 ? pow_x_r[1] :
                    counter_r == 2'b10 ? pow_x_r[3] : pow_x_r[5];
-assign mult_a[5] = counter_r == 2'b00 ? 32'b0 :
+assign mult_a[5] = counter_r == 2'b00 ? c[8] :
                    counter_r == 2'b01 ? c[2] :
                    counter_r == 2'b10 ? c[4] : c[6];
-assign mult_b[5] = counter_r == 2'b00 ? 32'b0 :
+assign mult_b[5] = counter_r == 2'b00 ? pow_x_r[8] :
                    counter_r == 2'b01 ? pow_x_r[2] :
                    counter_r == 2'b10 ? pow_x_r[4] : pow_x_r[6];
 
 assign final_result = mult_z[1]; // @ counter_r == 2'b00
 
-DW_fp_sum4 u_st1(.a(prev_sum_r), .b(add4b), .c(add4c), .d(add4d), .rnd(3'b000), .z(add4z), .status());
-
-assign add4b = counter_r == 2'b00 ? mult_z[2] : mult_z[4];
-assign add4c = counter_r == 2'b00 ? 32'b0 : mult_z[5];
-assign add4d = counter_r == 2'b01 ? c[0] :
-               (counter_r == 2'b10 || counter_r == 2'b00) ? 32'b0 :
-                                    mult_z[0];
+DW_fp_add u_add1(.a(prev_sum_r), .b(prev_sum2_r), .rnd(3'b000), .z(add2z), .status());
 
 always @(*) begin
     case(fn_sel)
@@ -202,13 +148,17 @@ end
 
 
 always @(*) begin
-    ori_sign_w = ori_sign_r;
+    ori_sign_w[0] = ori_sign_r[0];
+    ori_sign_w[1] = ori_sign_r[0];
+    ori_sign_w[2] = ori_sign_r[1];
     if (counter_r == 2'b00) begin
-        ori_sign_w = x[31];
+        ori_sign_w[0] = x[31];
     end
 end
 always @(posedge clk) begin
-    ori_sign_r <= ori_sign_w;
+    ori_sign_r[0] <= ori_sign_w[0];
+    ori_sign_r[1] <= ori_sign_w[1];
+    ori_sign_r[2] <= ori_sign_w[2];
 end
 
 // assign adder_sum = (
@@ -242,7 +192,7 @@ always @(*) begin
         c[8] = 0;
     end
     Sigmoid, SiLU: begin
-        c[0] = ori_sign_r ? 32'h3effdea5 : 32'hbf0010ae;
+        c[0] = ori_sign_r[0] ? 32'h3effdea5 : 32'hbf0010ae;
         c[1] = 32'h3e7c6c97;
         c[2] = 32'hbc462ace;
         c[3] = 32'hbd1cb0ed;
@@ -278,25 +228,38 @@ always @(*) begin
 end
 
 always @(*) begin
-    if (counter_r == 2'b00) begin
-        prev_sum_w = 0;
-    end
-    else begin
-        prev_sum_w = add4z;
-    end
+    prev_sum_w = mult_z[4];
+    prev_sum2_w = mult_z[5];
 end
 always @(posedge clk) begin
     prev_sum_r <= prev_sum_w;
+    prev_sum2_r <= prev_sum2_w;
 end
 
-assign {s_sign, s_exponent, s_mantissa} = pow_x_r[1];
+always @(*) begin
+    delay_x_w[1] = pow_x_r[1];
+    delay_x_w[2] = delay_x_r[1];
+end
+always @(posedge clk) begin
+    delay_x_r[1] <= delay_x_w[1];
+    delay_x_r[2] <= delay_x_w[2];
+end
+
+always @(*) begin
+    sum12_w = add2z;
+end
+always @(posedge clk) begin
+    sum12_r <= sum12_w;
+end
+
+assign {s_sign, s_exponent, s_mantissa} = delay_x_r[2];
 assign exp_minus_3 = s_exponent-3;
-assign PReLU_output = ori_sign_r ? {s_sign, exp_minus_3, s_mantissa} : pow_x_r[1];
-assign ELU_output = ori_sign_r ? prev_sum_r : pow_x_r[1];
+assign PReLU_output = ori_sign_r[2] ? {s_sign, exp_minus_3, s_mantissa} : delay_x_r[2];
+assign ELU_output = ori_sign_r[2] ? mult_z[6] : delay_x_r[2];
 // Odd functions need sign flipping
-assign Sigmoid_output = ori_sign_r ? prev_sum_r : {~prev_sum_r[31], prev_sum_r[30:0]};
-assign SiLU_output = final_result;
-assign Tanh_output = ori_sign_r ? add4z : {~add4z[31], add4z[30:0]};
+assign Sigmoid_output = ori_sign_r[2] ? mult_z[6] : {~mult_z[6][31], mult_z[6][30:0]};
+assign SiLU_output = mult_z[6];
+assign Tanh_output = ori_sign_r[2] ? mult_z[6] : {~mult_z[6][31], mult_z[6][30:0]};
 
 always @(*) begin
     case(fn_sel)
@@ -310,7 +273,7 @@ always @(*) begin
 end
 
 // Control logic
-assign CEN = counter_r == 2'b00 ? 1'b0 : 1'b1;
+assign CEN = counter_r == 2'b10 ? 1'b0 : 1'b1;
 assign WEN = 1'b0;
 assign done = state_r == DONE;
 assign busy = counter_r != 2'b11;
@@ -319,7 +282,7 @@ assign {overflow, addr_plus_1} = addr_r+1;
 always @(*) begin
     case(state_r)
     INIT: state_w = CALC;
-    CALC: state_w = overflow_r && overflowed_r && counter_r == 2'b00 ? DONE : CALC;
+    CALC: state_w = overflow_r && overflowed_r && counter_r == 2'b10 ? DONE : CALC;
     default: state_w = state_r;
     endcase
 end
@@ -353,7 +316,7 @@ always @(posedge clk) begin
 end
 
 always @(*) begin
-    overflowed_w = overflowed_r || (overflow && counter_r == 2'b00);
+    overflowed_w = overflowed_r || (overflow && counter_r == 2'b10);
 end
 always @(posedge clk) begin
     if (rst) begin
@@ -368,7 +331,7 @@ end
 always @(*) begin
     addr_w = addr_r;
     if (state_r == CALC) begin
-        addr_w = counter_r == 2'b00 ? addr_plus_1 : addr_r;
+        addr_w = counter_r == 2'b10 ? addr_plus_1 : addr_r;
     end
 
 end
@@ -379,6 +342,13 @@ always @(posedge clk) begin
     else begin
         addr_r <= addr_w;
     end
+end
+
+always @(*) begin
+    output_w = output_data;
+end
+always @(posedge clk) begin
+    output_r <= output_w;
 end
 
 endmodule

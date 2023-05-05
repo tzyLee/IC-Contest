@@ -1,7 +1,7 @@
 // `include "/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v"
 // `include "/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_i2flt.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v"
-`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_i2flt.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v"
+// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_i2flt.v"
 
 
 module AFE(clk, rst, fn_sel, x, busy, done);
@@ -79,14 +79,15 @@ wire signed [TERM_FIX_WIDTH-1:0] adder_sumt;
 
 // fp <-> fixed
 reg signed [TERM_FIX_WIDTH-1:0] to_convert;
+reg signed [X_FIX_WIDTH-1:0] fixed_r, fixed_w;
 wire [X_FIX_WIDTH-1:0] fixed;
 reg [31:0] shifted_fp32;
 wire [31:0] recover_fp32;
 
 wire [7:0] exp_adjust;
-wire sign, rsign;
-wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp;
-wire [22:0] mantissa, rmantissa;
+wire sign, rsign, unbuf_sign;
+wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp, unbuf_exponent;
+wire [22:0] mantissa, rmantissa, unbuf_mantissa;
 
 // Multiplier outputs
 wire signed [MULT_RES_FIX_WIDTH-1:0] m1, m2, m3, m4;
@@ -117,7 +118,7 @@ sram1024x32 u_mem(.Q(), .CLK(clk), .CEN(CEN), .WEN(WEN), .A(addr_r), .D(output_d
 // 11 | c5*x^5 + c6*x^6 + c7*x^7 + c8*x^8
 // 00 | receive new data, output to SRAM (+ x*sigmoid(x) for SiLU)
 
-assign fixed_padded = $signed({{(MULT_INT_WIDTH-X_INT_WIDTH){fixed[X_FIX_WIDTH-1]}}, fixed, {(MULT_FRAC_WIDTH-X_FRAC_WIDTH){1'b0}}});
+assign fixed_padded = $signed({{(MULT_INT_WIDTH-X_INT_WIDTH){fixed_r[X_FIX_WIDTH-1]}}, fixed_r, {(MULT_FRAC_WIDTH-X_FRAC_WIDTH){1'b0}}});
 assign m1a = (counter_r[0] ? $signed(m2t) : $signed(fixed3_r));
 assign m1b = (counter_r[0] ? $signed(fixed_padded) : $signed(fixed4_r));
 
@@ -136,7 +137,7 @@ assign m6 = $signed(fixed3_r) * $signed(m6c);
 assign m7 = $signed(fixed2_r) * $signed(m7c);
 assign m8 = $signed(m8a) * $signed(m8c);
 
-assign m9 = $signed(prev_sum_r) * $signed(fixed);
+assign m9 = $signed(prev_sum_r) * $signed(fixed_r);
 
 // Before constant scaling
 assign m1t = m1[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
@@ -254,14 +255,26 @@ end
 // fp -> fixed
 DW_fp_flt2i #(.isize(X_FIX_WIDTH)) u_flt2i(.a(shifted_fp32), .rnd(3'b000), .z(fixed), .status());
 assign {sign, exponent, mantissa} = x_r;
-assign shifted_exp = exponent+X_FRAC_WIDTH;
+assign {unbuf_sign, unbuf_exponent, unbuf_mantissa} = x;
+assign shifted_exp = unbuf_exponent+X_FRAC_WIDTH;
 
 always @(*) begin
     case(fn_sel)
-    Sigmoid, SiLU, Tanh: shifted_fp32 = {1'b1, shifted_exp, mantissa};
-    default: shifted_fp32 = {sign, shifted_exp, mantissa};
+    Sigmoid, SiLU, Tanh: shifted_fp32 = {1'b1, shifted_exp, unbuf_mantissa};
+    default: shifted_fp32 = {unbuf_sign, shifted_exp, unbuf_mantissa};
     endcase
 end
+
+always @(*) begin
+    fixed_w = fixed_r;
+    if (counter_r == 2'b00) begin
+        fixed_w = fixed;
+    end
+end
+always @(posedge clk) begin
+    fixed_r <= fixed_w;
+end
+
 
 // Output logic (fixed -> fp)
 always @(*) begin

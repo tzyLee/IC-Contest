@@ -1,7 +1,11 @@
 // `include "/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v"
 // `include "/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_i2flt.v"
-// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_flt2i.v"
-// `include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_i2flt.v"
+`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_addsub.v"
+`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_ifp_fp_conv.v"
+`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_ifp_conv.v"
+`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_ifp_addsub.v"
+`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_sum4.v"
+`include "/usr/cad/synopsys/synthesis/cur/dw/sim_ver/DW_fp_mult.v"
 
 
 module AFE(clk, rst, fn_sel, x, busy, done);
@@ -51,7 +55,7 @@ localparam MULT9_RES_FRAC_WIDTH = TERM_FRAC_WIDTH+X_FRAC_WIDTH;
 localparam MULT9_RES_FIX_WIDTH = MULT9_RES_INT_WIDTH+MULT9_RES_FRAC_WIDTH;
 
 // Controls
-reg [31:0] x_r, x_w;
+// reg [31:0] x_r, x_w;
 reg [1:0] state_r, state_w;
 reg [1:0] counter_r, counter_w;
 wire overflow;
@@ -72,8 +76,16 @@ reg signed [MULT_FIX_WIDTH-1:0] fixed3_r, fixed3_w;
 reg signed [MULT_FIX_WIDTH-1:0] fixed4_r, fixed4_w;
 wire signed [MULT_FIX_WIDTH-1:0] fixed_padded;
 
+reg ori_sign_r, ori_sign_w;
+reg [31:0] pow_x_r[1:8], pow_x_w[1:8];
+reg [31:0] flipped_x;
+wire [31:0] mult_a[0:5], mult_b[0:5], mult_z[0:5];
+reg [31:0] c[0:8];
+wire [31:0] add4a, add4b, add4c, add4d, add4z, final_result;
+
 // Stores \sum_{i} c{i}x^{i}
-reg signed [TERM_FIX_WIDTH-1:0] prev_sum_r, prev_sum_w;
+// reg signed [TERM_FIX_WIDTH-1:0] prev_sum_r, prev_sum_w;
+reg [31:0] prev_sum_r, prev_sum_w;
 wire signed [SUM_RES_FIX_WIDTH-1:0] adder_sum;
 wire signed [TERM_FIX_WIDTH-1:0] adder_sumt;
 
@@ -85,9 +97,9 @@ reg [31:0] shifted_fp32;
 wire [31:0] recover_fp32;
 
 wire [7:0] exp_adjust;
-wire sign, rsign, unbuf_sign;
-wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp, unbuf_exponent;
-wire [22:0] mantissa, rmantissa, unbuf_mantissa;
+wire sign, rsign, unbuf_sign, s_sign;
+wire [7:0] exponent, rexponent, exp_minus_3, shifted_exp, unbuf_exponent, s_exponent;
+wire [22:0] mantissa, rmantissa, unbuf_mantissa, s_mantissa;
 
 // Multiplier outputs
 wire signed [MULT_RES_FIX_WIDTH-1:0] m1, m2, m3, m4;
@@ -109,193 +121,182 @@ reg signed [TERM_FIX_WIDTH-1:0] c0;
 
 wire [31:0] PReLU_output, ELU_output, Sigmoid_output, SiLU_output, Tanh_output;
 
+integer i;
 
 sram1024x32 u_mem(.Q(), .CLK(clk), .CEN(CEN), .WEN(WEN), .A(addr_r), .D(output_data));
 
-// 4-cycle design (2-mult + fp2fi critical path)
-// 01 | x^2 = x*x, x^3 = x*x^2, x^4 = x^2*x^2
-// 10 | x^5 = x^4*x, x^6 = x^4*x^2, x^7 = x^4*x^3, x^8 = x^4*x^4, (c1*x + c2*x^2 + c3*x^3 + c4*x^4)
-// 11 | c5*x^5 + c6*x^6 + c7*x^7 + c8*x^8
-// 00 | receive new data, output to SRAM (+ x*sigmoid(x) for SiLU)
+DW_fp_mult u_m1(.a(mult_a[0]), .b(mult_b[0]), .rnd(3'b000), .z(mult_z[0]), .status());
+DW_fp_mult u_m2(.a(mult_a[1]), .b(mult_b[1]), .rnd(3'b000), .z(mult_z[1]), .status());
+DW_fp_mult u_m3(.a(mult_a[2]), .b(mult_b[2]), .rnd(3'b000), .z(mult_z[2]), .status());
+DW_fp_mult u_m4(.a(mult_a[3]), .b(mult_b[3]), .rnd(3'b000), .z(mult_z[3]), .status());
+DW_fp_mult u_m5(.a(mult_a[4]), .b(mult_b[4]), .rnd(3'b000), .z(mult_z[4]), .status());
+DW_fp_mult u_m6(.a(mult_a[5]), .b(mult_b[5]), .rnd(3'b000), .z(mult_z[5]), .status());
 
-assign fixed_padded = $signed({{(MULT_INT_WIDTH-X_INT_WIDTH){fixed_r[X_FIX_WIDTH-1]}}, fixed_r, {(MULT_FRAC_WIDTH-X_FRAC_WIDTH){1'b0}}});
-assign m1a = (counter_r[0] ? $signed(m2t) : $signed(fixed3_r));
-assign m1b = (counter_r[0] ? $signed(fixed_padded) : $signed(fixed4_r));
+assign mult_a[0] = counter_r == 2'b00 ? flipped_x : (counter_r == 2'b11 ? c[7] : pow_x_r[1]);
+assign mult_b[0] = counter_r == 2'b00 ? flipped_x :
+                   counter_r == 2'b01 ? pow_x_r[2] :
+                   counter_r == 2'b10 ? pow_x_r[4] :
+                                        pow_x_r[7];
+assign mult_a[1] = counter_r == 2'b00 ? pow_x_r[1] : pow_x_r[2];
+assign mult_b[1] = counter_r == 2'b00 ? prev_sum_r :
+                   counter_r == 2'b01 ? pow_x_r[2] : pow_x_r[4];
+assign mult_a[2] = counter_r == 2'b00 ? c[8] : pow_x_r[3];
+assign mult_b[2] = counter_r == 2'b00 ? pow_x_r[8] : pow_x_r[4];
+assign mult_a[3] = pow_x_r[4];
+assign mult_b[3] = pow_x_r[4];
 
-assign m2a = (counter_r[0] ? $signed(m3t) : $signed(fixed2_r));
-assign m2b = (counter_r[0] ? $signed(fixed_padded) : $signed(fixed4_r));
-assign m3a = (counter_r[0] ? $signed(fixed_padded) : $signed(fixed1_r));
-assign m3b = (counter_r[0] ? $signed(fixed_padded) : $signed(fixed4_r));
-assign m8a = (counter_r[0] ? $signed(fixed1_r) : $signed(fixed_padded));
+assign mult_a[4] = counter_r == 2'b00 ? 32'b0 :
+                   counter_r == 2'b01 ? c[1] :
+                   counter_r == 2'b10 ? c[3] : c[5];
+assign mult_b[4] = counter_r == 2'b00 ? 32'b0 :
+                   counter_r == 2'b01 ? pow_x_r[1] :
+                   counter_r == 2'b10 ? pow_x_r[3] : pow_x_r[5];
+assign mult_a[5] = counter_r == 2'b00 ? 32'b0 :
+                   counter_r == 2'b01 ? c[2] :
+                   counter_r == 2'b10 ? c[4] : c[6];
+assign mult_b[5] = counter_r == 2'b00 ? 32'b0 :
+                   counter_r == 2'b01 ? pow_x_r[2] :
+                   counter_r == 2'b10 ? pow_x_r[4] : pow_x_r[6];
 
-assign m1 = $signed(m1a) * $signed(m1b);
-assign m2 = $signed(m2a) * $signed(m2b);
-assign m3 = $signed(m3a) * $signed(m3b);
-assign m4 = $signed(fixed4_r) * $signed(fixed4_r);
-assign m5 = $signed(fixed4_r) * $signed(m5c);
-assign m6 = $signed(fixed3_r) * $signed(m6c);
-assign m7 = $signed(fixed2_r) * $signed(m7c);
-assign m8 = $signed(m8a) * $signed(m8c);
+assign final_result = mult_z[1]; // @ counter_r == 2'b00
 
-assign m9 = $signed(prev_sum_r) * $signed(fixed_r);
+DW_fp_sum4 u_st1(.a(prev_sum_r), .b(add4b), .c(add4c), .d(add4d), .rnd(3'b000), .z(add4z), .status());
 
-// Before constant scaling
-assign m1t = m1[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m2t = m2[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m3t = m3[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m4t = m4[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m5t = m5[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m6t = m6[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m7t = m7[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m8t = m8[2*MULT_FRAC_WIDTH+MULT_INT_WIDTH-1:MULT_FRAC_WIDTH];
-assign m9t = m9[MULT9_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT9_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-// After constant scaling
-assign m1tc = m1[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m2tc = m2[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m3tc = m3[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m4tc = m4[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m5tc = m5[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m6tc = m6[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m7tc = m7[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
-assign m8tc = m8[MULT_RES_FRAC_WIDTH+TERM_INT_WIDTH-1:MULT_RES_FRAC_WIDTH-TERM_FRAC_WIDTH];
+assign add4b = counter_r == 2'b00 ? mult_z[2] : mult_z[4];
+assign add4c = counter_r == 2'b00 ? 32'b0 : mult_z[5];
+assign add4d = counter_r == 2'b01 ? c[0] :
+               (counter_r == 2'b10 || counter_r == 2'b00) ? 32'b0 :
+                                    mult_z[0];
 
-assign adder_sum = (
-    $signed(m5tc) + $signed(m6tc) + $signed(m7tc) + $signed(m8tc) +
-    (counter_r == 2'b10 ? $signed(c0) : $signed(prev_sum_r))
-);
-assign adder_sumt = adder_sum[TERM_FIX_WIDTH-1:0];
+always @(*) begin
+    case(fn_sel)
+    Sigmoid, SiLU, Tanh: flipped_x = {1'b1, x[30:0]};
+    default: flipped_x = x;
+    endcase
+end
 
-// Polynomial coef.
-// variable `ep` in MATLAB program (epp, eps for sigmoid)
-// c0's bitwidth is different, use variable `ec`
-// Tips: use 100 bit to change bitwidth faster
+always @(*) begin
+    for (i=1;i<=8;i=i+1) begin
+        pow_x_w[i] = pow_x_r[i];
+    end
+    if (counter_r == 2'b00) begin
+        pow_x_w[1] = flipped_x;
+        pow_x_w[2] = mult_z[0];
+    end
+    else if (counter_r == 2'b01) begin
+        pow_x_w[3] = mult_z[0];
+        pow_x_w[4] = mult_z[1];
+    end
+    else if (counter_r == 2'b10) begin
+        pow_x_w[5] = mult_z[0];
+        pow_x_w[6] = mult_z[1];
+        pow_x_w[7] = mult_z[2];
+        pow_x_w[8] = mult_z[3];
+    end
+end
+always @(posedge clk) begin
+    for (i=1;i<=8;i=i+1) begin
+        pow_x_r[i] <= pow_x_w[i];
+    end
+end
+
+
+always @(*) begin
+    ori_sign_w = ori_sign_r;
+    if (counter_r == 2'b00) begin
+        ori_sign_w = x[31];
+    end
+end
+always @(posedge clk) begin
+    ori_sign_r <= ori_sign_w;
+end
+
+// assign adder_sum = (
+//     $signed(m5tc) + $signed(m6tc) + $signed(m7tc) + $signed(m8tc) +
+//     (counter_r == 2'b10 ? $signed(c0) : $signed(prev_sum_r))
+// );
+// assign adder_sumt = adder_sum[TERM_FIX_WIDTH-1:0];
+
 always @(*) begin
     case(fn_sel)
     PReLU: begin
-        m5c = 0;
-        m6c = 0;
-        m7c = 0;
-        m8c = 0;
-        c0 = 0;
+        c[0] = 0;
+        c[1] = 0;
+        c[2] = 0;
+        c[3] = 0;
+        c[4] = 0;
+        c[5] = 0;
+        c[6] = 0;
+        c[7] = 0;
+        c[8] = 0;
     end
     ELU: begin
-        m5c = counter_r == 2'b10 ? 100'sd1933772 : 0;
-        m6c = counter_r == 2'b10 ? 100'sd14659262 : 0;
-        m7c = counter_r == 2'b10 ? 100'sd58733260 : 100'sd103968;
-        m8c = counter_r == 2'b10 ? 100'sd130419856 : 0;
-        c0 = -100'sd103;
+        c[0] = 32'hb9cee82f;
+        c[1] = 32'h3df8c192;
+        c[2] = 32'h3d600cb3;
+        c[3] = 32'h3c5faebe;
+        c[4] = 32'h3aec0e5d;
+        c[5] = 32'h38cb0fd9;
+        c[6] = 0;
+        c[7] = 0;
+        c[8] = 0;
     end
     Sigmoid, SiLU: begin
-        m5c = counter_r == 2'b10 ? -100'sd13029075 : -100'sd3205;
-        m6c = counter_r == 2'b10 ? -100'sd41075636: -100'sd129840;
-        m7c = counter_r == 2'b10 ? -100'sd12987086 : -100'sd1889816;
-        m8c = counter_r == 2'b10 ? 100'sd264685936 : 0;
-        c0 = sign ? 100'sd131005 : -100'sd131139;
+        c[0] = ori_sign_r ? 32'h3effdea5 : 32'hbf0010ae;
+        c[1] = 32'h3e7c6c97;
+        c[2] = 32'hbc462ace;
+        c[3] = 32'hbd1cb0ed;
+        c[4] = 32'hbc46ced3;
+        c[5] = 32'hbae6b0bd;
+        c[6] = 32'hb8fd97f9;
+        c[7] = 32'hb6485746;
+        c[8] = 0;
     end
     Tanh: begin
-        m5c = counter_r == 2'b10 ? -100'sd414683680 : -100'sd2307650;
-        m6c = counter_r == 2'b10 ? -100'sd619167488 : -100'sd24303016;
-        m7c = counter_r == 2'b10 ? -100'sd62268568 : -100'sd135169440;
-        m8c = counter_r == 2'b10 ? 100'sd1073428416 : -100'sd90435;
-        c0 = 100'sd152;
+        c[0] = 32'h3a181730;
+        c[1] = 32'h3f7fecdf;
+        c[2] = 32'hbd6d8926;
+        c[3] = 32'hbf139efc;
+        c[4] = 32'hbec5bc91;
+        c[5] = 32'hbe00e85a;
+        c[6] = 32'hbcb96ad4;
+        c[7] = 32'hbb0cd90a;
+        c[8] = 32'hb8b0a1b0;
     end
     default: begin
-        m5c = 0;
-        m6c = 0;
-        m7c = 0;
-        m8c = 0;
-        c0 = 0;
+        c[0] = 0;
+        c[1] = 0;
+        c[2] = 0;
+        c[3] = 0;
+        c[4] = 0;
+        c[5] = 0;
+        c[6] = 0;
+        c[7] = 0;
+        c[8] = 0;
     end
     endcase
 end
 
 always @(*) begin
-    fixed1_w = fixed1_r;
-    fixed2_w = fixed2_r;
-    fixed3_w = fixed3_r;
-    fixed4_w = fixed4_r;
-
-    if (counter_r == 2'b00 && fn_sel == PReLU) begin
-        fixed1_w = fixed_padded;
-        fixed2_w = fixed2_r;
-        fixed3_w = fixed3_r;
-        fixed4_w = fixed4_r;
-    end
-    else if (counter_r == 2'b01) begin
-        fixed1_w = fixed_padded;
-        fixed2_w = m3t;
-        fixed3_w = m2t;
-        fixed4_w = m1t;
-    end
-    else if (counter_r == 2'b10) begin
-        fixed1_w = m4t;
-        fixed2_w = m3t;
-        fixed3_w = m2t;
-        fixed4_w = m1t;
-    end
-end
-always @(posedge clk) begin
-    fixed1_r <= fixed1_w;
-    fixed2_r <= fixed2_w;
-    fixed3_r <= fixed3_w;
-    fixed4_r <= fixed4_w;
-end
-always @(*) begin
-    if (counter_r == 2'b01) begin
+    if (counter_r == 2'b00) begin
         prev_sum_w = 0;
     end
     else begin
-        prev_sum_w = adder_sumt;
+        prev_sum_w = add4z;
     end
 end
 always @(posedge clk) begin
     prev_sum_r <= prev_sum_w;
 end
 
-// fp -> fixed
-DW_fp_flt2i #(.isize(X_FIX_WIDTH)) u_flt2i(.a(shifted_fp32), .rnd(3'b000), .z(fixed), .status());
-assign {sign, exponent, mantissa} = x_r;
-assign {unbuf_sign, unbuf_exponent, unbuf_mantissa} = x;
-assign shifted_exp = unbuf_exponent+X_FRAC_WIDTH;
-
-always @(*) begin
-    case(fn_sel)
-    Sigmoid, SiLU, Tanh: shifted_fp32 = {1'b1, shifted_exp, unbuf_mantissa};
-    default: shifted_fp32 = {unbuf_sign, shifted_exp, unbuf_mantissa};
-    endcase
-end
-
-always @(*) begin
-    fixed_w = fixed_r;
-    if (counter_r == 2'b00) begin
-        fixed_w = fixed;
-    end
-end
-always @(posedge clk) begin
-    fixed_r <= fixed_w;
-end
-
-
-// Output logic (fixed -> fp)
-always @(*) begin
-    to_convert = prev_sum_r;
-    if (fn_sel == SiLU) begin
-        to_convert = m9t;
-    end
-end
-
-DW_fp_i2flt #(.isize(TERM_FIX_WIDTH)) u_i2flt(.a(to_convert), .rnd(3'b000), .z(recover_fp32), .status());
-
-assign {rsign, rexponent, rmantissa} = recover_fp32;
-assign exp_minus_3 = (fn_sel == PReLU ? exponent : rexponent)-3;
-
-assign exp_adjust = rexponent-TERM_FRAC_WIDTH;
-assign PReLU_output = sign ? {sign, exp_minus_3, mantissa} : x_r;
-assign ELU_output = rsign ? {rsign, exp_adjust, rmantissa} : x_r;
+assign {s_sign, s_exponent, s_mantissa} = pow_x_r[1];
+assign exp_minus_3 = s_exponent-3;
+assign PReLU_output = ori_sign_r ? {s_sign, exp_minus_3, s_mantissa} : pow_x_r[1];
+assign ELU_output = ori_sign_r ? prev_sum_r : pow_x_r[1];
 // Odd functions need sign flipping
-assign Sigmoid_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
-assign SiLU_output = {rsign, exp_adjust, rmantissa};
-assign Tanh_output = sign ? {rsign, exp_adjust, rmantissa} : {~rsign, exp_adjust, rmantissa};
+assign Sigmoid_output = ori_sign_r ? prev_sum_r : {~prev_sum_r[31], prev_sum_r[30:0]};
+assign SiLU_output = final_result;
+assign Tanh_output = ori_sign_r ? add4z : {~add4z[31], add4z[30:0]};
 
 always @(*) begin
     case(fn_sel)
@@ -341,16 +342,6 @@ always @(posedge clk) begin
     else begin
         counter_r <= counter_w;
     end
-end
-
-always @(*) begin
-    x_w = x_r;
-    if (counter_r == 2'b00) begin
-        x_w = x;
-    end
-end
-always @(posedge clk) begin
-    x_r <= x_w;
 end
 
 // DONE after 1023 -> 0 twice

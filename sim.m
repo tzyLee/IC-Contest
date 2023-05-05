@@ -70,35 +70,35 @@ actual = fi_polyval(qp, qgx);
 %% Sigmoid
 % gx = PAT1;
 % ggold = 1./(1+exp(-gx));
-% 
+%
 % x = [nx; -px];
 % gold = [1./(1+exp(-nx))-0.5; 1./(1+exp(px))-0.5];
-% 
+%
 % qx = single(fi(x, 1, wl, fl));
 % % 6-degree is fine for sigmoid, but failed in SiLU
 % p = polyfit(qx, gold, 7);
-% 
+%
 % qgx = fi(gx, 1, wl, fl);
 % qp = fi(p, 1, wl, fl);
-% 
+%
 % qpp = qp(:);
 % qpn = qp(:);
 % qpp(end) = qpp(end)-0.5;
 % qpn(end) = qpn(end)+0.5;
 % actual = fi_polyval(qpn, qgx);
 % nactual = fi_polyval(qpp, -qgx);
-% 
+%
 % % qp5 = fi(0.5, 0, 1, 1);
 % % actual(qgx > 0) = qp5-nactual(qgx > 0);
 % % actual(qgx < 0) = actual(qgx < 0)+qp5;
-% 
+%
 % % Combining 0.5 into poly's const
 % actual(qgx > 0) = -nactual(qgx > 0);
 
 %% SiLU (uncomment Sigmoid code aswell)
 % gx = PAT1;
 % ggold = gx./(1+exp(-gx));
-% 
+%
 % qgx2 = fi(gx, 1, wl, fl);
 % actual = actual .* qgx2;
 % actual = fi(actual, 1, wl, fl);
@@ -106,13 +106,13 @@ actual = fi_polyval(qp, qgx);
 %% Tanh
 % gx = PAT1;
 % ggold = tanh(gx);
-% 
+
 % x = [nx; -px];
 % gold = [tanh(nx); tanh(-px)];
-% 
+
 % qx = single(fi(x, 1, wl, fl));
 % p = polyfit(qx, gold, 8);
-% 
+
 % qgx = fi(gx, 1, wl, fl);
 % qp = fi(p, 1, wl, fl);
 % actual = fi_polyval(qp, qgx);
@@ -129,6 +129,8 @@ if exist('qpp', 'var')
     ecn = int(fi(qpn(end), 1, fl+2, fl-10));
 end
 
+% convert fp32 to hex (sigmoid constants need to be handled differently)
+hexp = reshape(sprintf('%tx', p), 8, [])';
 
 %%
 actual = single(actual);
@@ -181,20 +183,20 @@ end
 function out = fi_polyval(p, x)
     pow_x = cell(size(p));
     last = fi(ones(size(x)), 0, 1, 0);
-    
+
     M = length(pow_x);
     for i = M:-1:1
         last = fi(last, 1, get(p, 'WordLength')+20, get(p, 'FractionLength')+2);
         pow_x{i} = last;
         last = last.*x;
     end
- 
+
     out = cell(size(p));
     for i = 1:M
         out{i} = pow_x{i} .* p(i);
         out{i} = fi(out{i}, 1, get(p, 'WordLength')-2, get(p, 'FractionLength')-10);
     end
-    
+
     wl = get(out{1}, 'WordLength');
     fl = get(out{1}, 'FractionLength');
     for i = 2:M

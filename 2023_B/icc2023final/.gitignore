@@ -1,0 +1,13 @@
+csrc
+nWaveLog
+novas.*
+simv*
+ucli.key
+BSSLib.lib++
+*.log
+novas_dump.log
+DW_fp*.v
+*.fsdb
+*.swp
+.mypy*
+sram1024x32/
